@@ -10,8 +10,8 @@ public sealed class MetadataFetcher(
 	IServiceScopeFactory ScopeFactory,
 	ILogger<MetadataFetcher> Logger) : BackgroundService
 {
-	private const int TimeoutSeconds = 30;
-	private const int MaxConcurrentFetches = 10;
+	private const int TimeoutSeconds = 15; // Reduced from 30 - fail fast
+	private const int MaxConcurrentFetches = 25; // Increased from 10
 	private const int TcpListenPort = 55555;
 	private const int StatsIntervalSeconds = 10;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
@@ -30,8 +30,8 @@ public sealed class MetadataFetcher(
 	/// <inheritdoc/>
 	protected override async Task ExecuteAsync(CancellationToken CancellationToken)
 	{
-		Logger.LogInformation("Starting Metadata Fetcher on TCP port {Port} (max {Max} concurrent)...", 
-			TcpListenPort, MaxConcurrentFetches);
+		Logger.LogInformation("Starting Metadata Fetcher on TCP port {Port} (max {Max} concurrent, {Timeout}s timeout)...", 
+			TcpListenPort, MaxConcurrentFetches, TimeoutSeconds);
 
 		EngineSettingsBuilder SettingsBuilder = new()
 		{
@@ -87,7 +87,6 @@ public sealed class MetadataFetcher(
 	private async Task ProcessHashAsync(string HashHex, SemaphoreSlim Semaphore, CancellationToken CancellationToken)
 	{
 		Interlocked.Increment(ref FetchAttempts);
-		Logger.LogDebug("[FETCH] Starting: {Hash}", HashHex[..16] + "...");
 
 		try
 		{
@@ -98,14 +97,12 @@ public sealed class MetadataFetcher(
 			bool Exists = await Db.Torrents.AnyAsync(T => T.InfoHash == HashHex, CancellationToken);
 			if (Exists)
 			{
-				Logger.LogDebug("[SKIP] Already indexed: {Hash}", HashHex[..16] + "...");
 				return;
 			}
 
 			// Parse hex string to InfoHash
 			if (HashHex.Length != 40)
 			{
-				Logger.LogWarning("[INVALID] Bad hash length: {Hash}", HashHex);
 				return;
 			}
 
@@ -119,7 +116,6 @@ public sealed class MetadataFetcher(
 			{
 				DateTime StartTime = DateTime.UtcNow;
 				await Manager.StartAsync();
-				Logger.LogDebug("[FETCH] Waiting for metadata: {Hash}", HashHex[..16] + "...");
 
 				// Poll for metadata with timeout
 				while (true)
@@ -143,11 +139,10 @@ public sealed class MetadataFetcher(
 					if ((DateTime.UtcNow - StartTime).TotalSeconds >= TimeoutSeconds)
 					{
 						Interlocked.Increment(ref FetchTimeouts);
-						Logger.LogDebug("[TIMEOUT] No metadata after {Seconds}s: {Hash}", TimeoutSeconds, HashHex[..16] + "...");
 						return;
 					}
 
-					await Task.Delay(1000, CancellationToken);
+					await Task.Delay(500, CancellationToken);
 				}
 			}
 			finally
