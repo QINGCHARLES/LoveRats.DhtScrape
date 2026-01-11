@@ -94,3 +94,4 @@ E:\source\LoveRats\LoveRats.DhtScrape\obj\Debug\net10.0\DhtScraper.xml
 E:\source\LoveRats\LoveRats.DhtScrape\obj\Debug\net10.0\DhtScraper.pdb
 E:\source\LoveRats\LoveRats.DhtScrape\obj\Debug\net10.0\DhtScraper.genruntimeconfig.cache
 E:\source\LoveRats\LoveRats.DhtScrape\obj\Debug\net10.0\ref\DhtScraper.dll
+E:\source\LoveRats\LoveRats.DhtScrape\obj\Debug\net10.0\DhtScraper.sourcelink.json

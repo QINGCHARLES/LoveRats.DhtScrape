@@ -55,6 +55,12 @@
         <member name="P:DhtScraper.Data.TorrentInfo.Files">
             <summary>Files contained in this torrent.</summary>
         </member>
+        <member name="T:DhtScraper.Services.ConsoleRenderer">
+            <summary>Renders live TUI dashboard to console.</summary>
+        </member>
+        <member name="M:DhtScraper.Services.ConsoleRenderer.ExecuteAsync(System.Threading.CancellationToken)">
+            <inheritdoc/>
+        </member>
         <member name="T:DhtScraper.Services.DhtCrawler">
             <summary>Recursive DHT spider using KRPC protocol over UDP.</summary>
             <remarks>
@@ -62,7 +68,7 @@
             Sniffs info_hash values from get_peers and announce_peer queries.
             </remarks>
         </member>
-        <member name="M:DhtScraper.Services.DhtCrawler.#ctor(System.Threading.Channels.ChannelWriter{System.String},Microsoft.Extensions.Logging.ILogger{DhtScraper.Services.DhtCrawler})">
+        <member name="M:DhtScraper.Services.DhtCrawler.#ctor(System.Threading.Channels.ChannelWriter{System.String})">
             <summary>Recursive DHT spider using KRPC protocol over UDP.</summary>
             <remarks>
             Acts as a Sybil node by using random node IDs per request.
@@ -79,7 +85,7 @@
             to download only the metadata (file names, sizes) from the swarm.
             </remarks>
         </member>
-        <member name="M:DhtScraper.Services.MetadataFetcher.#ctor(System.Threading.Channels.ChannelReader{System.String},Microsoft.Extensions.DependencyInjection.IServiceScopeFactory,Microsoft.Extensions.Logging.ILogger{DhtScraper.Services.MetadataFetcher})">
+        <member name="M:DhtScraper.Services.MetadataFetcher.#ctor(System.Threading.Channels.ChannelReader{System.String},Microsoft.Extensions.DependencyInjection.IServiceScopeFactory)">
             <summary>Fetches torrent metadata via BEP 009 extension protocol.</summary>
             <remarks>
             Consumes info_hash values from the channel and uses MonoTorrent

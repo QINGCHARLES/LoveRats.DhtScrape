@@ -1,4 +1,9 @@
+using System.Text;
+
 HostApplicationBuilder Builder = Host.CreateApplicationBuilder(args);
+
+// Disable default console logging (we have TUI)
+Builder.Logging.ClearProviders();
 
 // 1. Channel for producer/consumer pattern between Crawler and Fetcher
 Channel<string> HashChannel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
@@ -16,6 +21,7 @@ Builder.Services.AddDbContext<TorrentContext>();
 // 3. Background services
 Builder.Services.AddHostedService<DhtCrawler>();
 Builder.Services.AddHostedService<MetadataFetcher>();
+Builder.Services.AddHostedService<ConsoleRenderer>();
 
 IHost App = Builder.Build();
 

@@ -15,3 +15,4 @@ global using Microsoft.Extensions.Logging;
 global using MonoTorrent;
 global using MonoTorrent.Client;
 global using MonoTorrent.Connections;
+global using System.Text;

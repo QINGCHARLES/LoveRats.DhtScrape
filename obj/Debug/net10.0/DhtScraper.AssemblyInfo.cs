@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("DhtScraper")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a9a42eb8ea420d955a341c8ebbe057268f3fb503")]
 [assembly: System.Reflection.AssemblyProductAttribute("DhtScraper")]
 [assembly: System.Reflection.AssemblyTitleAttribute("DhtScraper")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
