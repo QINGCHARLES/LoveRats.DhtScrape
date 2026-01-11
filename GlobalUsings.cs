@@ -1,0 +1,17 @@
+global using System.Collections.Concurrent;
+global using System.ComponentModel.DataAnnotations;
+global using System.ComponentModel.DataAnnotations.Schema;
+global using System.Net;
+global using System.Net.Sockets;
+global using System.Threading.Channels;
+global using BencodeNET.Objects;
+global using BencodeNET.Parsing;
+global using DhtScraper.Data;
+global using DhtScraper.Services;
+global using Microsoft.EntityFrameworkCore;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Hosting;
+global using Microsoft.Extensions.Logging;
+global using MonoTorrent;
+global using MonoTorrent.Client;
+global using MonoTorrent.Connections;

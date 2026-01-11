@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>DhtScraper</name>
+    </assembly>
+    <members>
+        <member name="T:DhtScraper.Data.TorrentContext">
+            <summary>Database context for torrent indexing with SQLite.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentContext.Torrents">
+            <summary>Indexed torrents discovered from DHT network.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentContext.Files">
+            <summary>Files contained within indexed torrents.</summary>
+        </member>
+        <member name="M:DhtScraper.Data.TorrentContext.OnConfiguring(Microsoft.EntityFrameworkCore.DbContextOptionsBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="M:DhtScraper.Data.TorrentContext.OnModelCreating(Microsoft.EntityFrameworkCore.ModelBuilder)">
+            <inheritdoc/>
+        </member>
+        <member name="T:DhtScraper.Data.TorrentFile">
+            <summary>File entry within a torrent.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentFile.Id">
+            <summary>Primary key.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentFile.Path">
+            <summary>File path within the torrent.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentFile.SizeBytes">
+            <summary>File size in bytes.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentFile.TorrentInfoId">
+            <summary>Foreign key to parent torrent.</summary>
+        </member>
+        <member name="T:DhtScraper.Data.TorrentInfo">
+            <summary>Discovered torrent metadata indexed from DHT network.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.Id">
+            <summary>Primary key.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.InfoHash">
+            <summary>Hex-encoded info hash (40 characters).</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.Name">
+            <summary>Torrent name extracted from metadata.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.TotalSizeBytes">
+            <summary>Total size of all files in bytes.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.DiscoveredAtUtc">
+            <summary>UTC timestamp when this torrent was discovered.</summary>
+        </member>
+        <member name="P:DhtScraper.Data.TorrentInfo.Files">
+            <summary>Files contained in this torrent.</summary>
+        </member>
+        <member name="T:DhtScraper.Services.DhtCrawler">
+            <summary>Recursive DHT spider using KRPC protocol over UDP.</summary>
+            <remarks>
+            Acts as a Sybil node by using random node IDs per request.
+            Sniffs info_hash values from get_peers and announce_peer queries.
+            </remarks>
+        </member>
+        <member name="M:DhtScraper.Services.DhtCrawler.#ctor(System.Threading.Channels.ChannelWriter{System.String},Microsoft.Extensions.Logging.ILogger{DhtScraper.Services.DhtCrawler})">
+            <summary>Recursive DHT spider using KRPC protocol over UDP.</summary>
+            <remarks>
+            Acts as a Sybil node by using random node IDs per request.
+            Sniffs info_hash values from get_peers and announce_peer queries.
+            </remarks>
+        </member>
+        <member name="M:DhtScraper.Services.DhtCrawler.ExecuteAsync(System.Threading.CancellationToken)">
+            <inheritdoc/>
+        </member>
+        <member name="T:DhtScraper.Services.MetadataFetcher">
+            <summary>Fetches torrent metadata via BEP 009 extension protocol.</summary>
+            <remarks>
+            Consumes info_hash values from the channel and uses MonoTorrent
+            to download only the metadata (file names, sizes) from the swarm.
+            </remarks>
+        </member>
+        <member name="M:DhtScraper.Services.MetadataFetcher.#ctor(System.Threading.Channels.ChannelReader{System.String},Microsoft.Extensions.DependencyInjection.IServiceScopeFactory,Microsoft.Extensions.Logging.ILogger{DhtScraper.Services.MetadataFetcher})">
+            <summary>Fetches torrent metadata via BEP 009 extension protocol.</summary>
+            <remarks>
+            Consumes info_hash values from the channel and uses MonoTorrent
+            to download only the metadata (file names, sizes) from the swarm.
+            </remarks>
+        </member>
+        <member name="M:DhtScraper.Services.MetadataFetcher.ExecuteAsync(System.Threading.CancellationToken)">
+            <inheritdoc/>
+        </member>
+    </members>
+</doc>
