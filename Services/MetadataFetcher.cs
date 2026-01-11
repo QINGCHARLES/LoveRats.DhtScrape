@@ -10,8 +10,8 @@ public sealed class MetadataFetcher(
 	IServiceScopeFactory ScopeFactory,
 	ILogger<MetadataFetcher> Logger) : BackgroundService
 {
-	private const int TimeoutSeconds = 30; // Reduced from 45
-	private const int MaxConcurrentFetches = 10; // Reduced from 50
+	private const int TimeoutSeconds = 30;
+	private const int MaxConcurrentFetches = 10;
 	private const int TcpListenPort = 55555;
 	private const int StatsIntervalSeconds = 10;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
@@ -117,14 +117,18 @@ public sealed class MetadataFetcher(
 
 			try
 			{
-				using CancellationTokenSource TimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
-				TimeoutCts.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
-
+				DateTime StartTime = DateTime.UtcNow;
 				await Manager.StartAsync();
 				Logger.LogDebug("[FETCH] Waiting for metadata: {Hash}", HashHex[..16] + "...");
 
-				while (!TimeoutCts.Token.IsCancellationRequested)
+				// Poll for metadata with timeout
+				while (true)
 				{
+					if (CancellationToken.IsCancellationRequested)
+					{
+						return; // App shutdown
+					}
+
 					if (Manager.HasMetadata)
 					{
 						await SaveToDatabaseAsync(Db, Manager, HashHex, CancellationToken);
@@ -135,12 +139,16 @@ public sealed class MetadataFetcher(
 						return;
 					}
 
-					await Task.Delay(1000, TimeoutCts.Token); // Increased from 500ms
-				}
+					// Check timeout
+					if ((DateTime.UtcNow - StartTime).TotalSeconds >= TimeoutSeconds)
+					{
+						Interlocked.Increment(ref FetchTimeouts);
+						Logger.LogDebug("[TIMEOUT] No metadata after {Seconds}s: {Hash}", TimeoutSeconds, HashHex[..16] + "...");
+						return;
+					}
 
-				// Timeout reached
-				Interlocked.Increment(ref FetchTimeouts);
-				Logger.LogDebug("[TIMEOUT] No metadata after {Seconds}s: {Hash}", TimeoutSeconds, HashHex[..16] + "...");
+					await Task.Delay(1000, CancellationToken);
+				}
 			}
 			finally
 			{
