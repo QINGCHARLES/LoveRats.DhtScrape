@@ -9,8 +9,8 @@ public sealed class MetadataFetcher(
 	ChannelReader<string> HashChannelReader,
 	IServiceScopeFactory ScopeFactory) : BackgroundService
 {
-	private const int TimeoutSeconds = 15;
-	private const int MaxConcurrentFetches = 25;
+	private const int TimeoutSeconds = 10;
+	private const int MaxConcurrentFetches = 100;
 	private const int TcpListenPort = 55555;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
 
@@ -153,6 +153,14 @@ public sealed class MetadataFetcher(
 			InfoHash = HashHex,
 			Name = Manager.Torrent.Name,
 			TotalSizeBytes = Manager.Torrent.Size,
+			CreationDate = Manager.Torrent.CreationDate,
+			Comment = Manager.Torrent.Comment,
+			CreatedBy = Manager.Torrent.CreatedBy,
+			IsPrivate = Manager.Torrent.IsPrivate,
+			PieceLengthBytes = Manager.Torrent.PieceLength,
+			PieceCount = (int)Math.Ceiling((double)Manager.Torrent.Size / Manager.Torrent.PieceLength),
+			FileCount = Manager.Torrent.Files.Count,
+			Trackers = string.Join(";", Manager.Torrent.AnnounceUrls.SelectMany(T => T)),
 			Files = [.. Manager.Torrent.Files.Select(F => new Data.TorrentFile
 			{
 				Path = F.Path,

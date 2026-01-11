@@ -12,7 +12,7 @@ public sealed class DhtCrawler(
 	private const int StandardDhtPort = 6881;
 	private const int RebootstrapDelayMs = 5000;
 	private const int MaxSeenNodes = 50_000;
-	private const int MaxQueriesPerSecond = 100;
+	private const int MaxQueriesPerSecond = 300;
 
 	private static readonly string[] Routers =
 	[
