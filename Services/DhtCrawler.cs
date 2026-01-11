@@ -15,6 +15,7 @@ public sealed class DhtCrawler(
 	private const int ThrottleDelayMs = 10;
 	private const int LowQueueThreshold = 100;
 	private const int MaxSeenNodes = 100_000;
+	private const int StatsIntervalSeconds = 10;
 
 	private static readonly string[] Routers =
 	[
@@ -27,6 +28,13 @@ public sealed class DhtCrawler(
 	private readonly BencodeParser Parser = new();
 	private readonly ConcurrentQueue<IPEndPoint> NodesToVisit = new();
 	private readonly HashSet<string> SeenNodes = [];
+	private readonly HashSet<string> SeenHashes = [];
+
+	// Stats counters
+	private long PacketsReceived = 0;
+	private long PacketsSent = 0;
+	private long HashesDiscovered = 0;
+	private long NodesDiscovered = 0;
 
 	/// <inheritdoc/>
 	protected override async Task ExecuteAsync(CancellationToken CancellationToken)
@@ -40,17 +48,39 @@ public sealed class DhtCrawler(
 
 		Task ReceiveTask = ReceiveLoopAsync(CancellationToken);
 		Task CrawlTask = CrawlLoopAsync(CancellationToken);
+		Task StatsTask = StatsLoopAsync(CancellationToken);
 
-		await Task.WhenAll(ReceiveTask, CrawlTask);
+		await Task.WhenAll(ReceiveTask, CrawlTask, StatsTask);
+	}
+
+	private async Task StatsLoopAsync(CancellationToken CancellationToken)
+	{
+		while (!CancellationToken.IsCancellationRequested)
+		{
+			await Task.Delay(TimeSpan.FromSeconds(StatsIntervalSeconds), CancellationToken);
+
+			Logger.LogInformation(
+				"[STATS] Sent: {Sent} | Recv: {Recv} | Queue: {Queue} | Nodes: {Nodes} | Hashes: {Hashes} | Unique: {Unique}",
+				Interlocked.Read(ref PacketsSent),
+				Interlocked.Read(ref PacketsReceived),
+				NodesToVisit.Count,
+				Interlocked.Read(ref NodesDiscovered),
+				Interlocked.Read(ref HashesDiscovered),
+				SeenHashes.Count);
+		}
 	}
 
 	private async Task BootstrapAsync(CancellationToken CancellationToken)
 	{
+		Logger.LogInformation("Bootstrapping from {Count} routers...", Routers.Length);
+
 		foreach (string Router in Routers)
 		{
 			try
 			{
 				IPAddress[] Addresses = await Dns.GetHostAddressesAsync(Router, CancellationToken);
+				Logger.LogInformation("Resolved {Router} to {Count} addresses", Router, Addresses.Length);
+
 				foreach (IPAddress Address in Addresses)
 				{
 					NodesToVisit.Enqueue(new IPEndPoint(Address, StandardDhtPort));
@@ -61,11 +91,15 @@ public sealed class DhtCrawler(
 				Logger.LogWarning("Failed to resolve {Router}: {Message}", Router, Ex.Message);
 			}
 		}
+
+		Logger.LogInformation("Bootstrap complete, {Count} initial nodes queued", NodesToVisit.Count);
 	}
 
 	private async Task ReceiveLoopAsync(CancellationToken CancellationToken)
 	{
 		byte[] Buffer = new byte[65535];
+		Logger.LogInformation("Receive loop started, waiting for packets...");
+
 		while (!CancellationToken.IsCancellationRequested)
 		{
 			try
@@ -75,6 +109,8 @@ public sealed class DhtCrawler(
 					SocketFlags.None,
 					new IPEndPoint(IPAddress.Any, 0),
 					CancellationToken);
+
+				Interlocked.Increment(ref PacketsReceived);
 
 				byte[] Data = Buffer.AsSpan(0, Result.ReceivedBytes).ToArray();
 				ProcessPacket(Data, (IPEndPoint)Result.RemoteEndPoint);
@@ -92,6 +128,8 @@ public sealed class DhtCrawler(
 
 	private async Task CrawlLoopAsync(CancellationToken CancellationToken)
 	{
+		Logger.LogInformation("Crawl loop started...");
+
 		while (!CancellationToken.IsCancellationRequested)
 		{
 			if (NodesToVisit.TryDequeue(out IPEndPoint? Endpoint))
@@ -106,7 +144,7 @@ public sealed class DhtCrawler(
 			}
 			else
 			{
-				// Queue empty - re-bootstrap to restart the cycle
+				Logger.LogDebug("Queue empty, re-bootstrapping...");
 				await BootstrapAsync(CancellationToken);
 				await Task.Delay(RebootstrapDelayMs, CancellationToken);
 			}
@@ -122,12 +160,21 @@ public sealed class DhtCrawler(
 			// 1. Sniff InfoHashes from queries (get_peers / announce_peer)
 			if (Dict.Get<BString>("y")?.ToString() == "q")
 			{
+				string? QueryType = Dict.Get<BString>("q")?.ToString();
 				BDictionary? Args = Dict.Get<BDictionary>("a");
+
 				if (Args is not null && Args.ContainsKey("info_hash"))
 				{
 					byte[] HashBytes = Args.Get<BString>("info_hash")!.Value.ToArray();
 					string HashHex = BitConverter.ToString(HashBytes).Replace("-", "");
-					HashChannelWriter.TryWrite(HashHex);
+
+					if (SeenHashes.Add(HashHex))
+					{
+						Interlocked.Increment(ref HashesDiscovered);
+						HashChannelWriter.TryWrite(HashHex);
+						Logger.LogDebug("[{Type}] New hash from {Sender}: {Hash}",
+							QueryType?.ToUpperInvariant() ?? "QUERY", Sender, HashHex[..16] + "...");
+					}
 				}
 			}
 
@@ -138,7 +185,12 @@ public sealed class DhtCrawler(
 				if (Response is not null && Response.ContainsKey("nodes"))
 				{
 					byte[] NodesBytes = Response.Get<BString>("nodes")!.Value.ToArray();
-					ParseCompactNodes(NodesBytes);
+					int NodeCount = ParseCompactNodes(NodesBytes);
+
+					if (NodeCount > 0)
+					{
+						Logger.LogDebug("Got {Count} nodes from {Sender}", NodeCount, Sender);
+					}
 				}
 			}
 		}
@@ -148,13 +200,15 @@ public sealed class DhtCrawler(
 		}
 	}
 
-	private void ParseCompactNodes(byte[] NodesBytes)
+	private int ParseCompactNodes(byte[] NodesBytes)
 	{
 		// Each node is 26 bytes: [20 bytes ID][4 bytes IP][2 bytes Port]
 		const int NodeSizeBytes = 26;
 		const int IdSizeBytes = 20;
 		const int IpSizeBytes = 4;
 		const int PortSizeBytes = 2;
+
+		int NodesAdded = 0;
 
 		for (int i = 0; i < NodesBytes.Length; i += NodeSizeBytes)
 		{
@@ -179,14 +233,19 @@ public sealed class DhtCrawler(
 			if (SeenNodes.Add(Endpoint.ToString()))
 			{
 				NodesToVisit.Enqueue(Endpoint);
+				Interlocked.Increment(ref NodesDiscovered);
+				NodesAdded++;
 
 				// Crude memory cleanup when set grows too large
 				if (SeenNodes.Count > MaxSeenNodes)
 				{
+					Logger.LogInformation("Clearing seen nodes cache ({Count} entries)", SeenNodes.Count);
 					SeenNodes.Clear();
 				}
 			}
 		}
+
+		return NodesAdded;
 	}
 
 	private async Task SendFindNodeAsync(IPEndPoint Target)
@@ -217,6 +276,7 @@ public sealed class DhtCrawler(
 		try
 		{
 			await UdpSocket.SendToAsync(Bytes, SocketFlags.None, Target);
+			Interlocked.Increment(ref PacketsSent);
 		}
 		catch
 		{

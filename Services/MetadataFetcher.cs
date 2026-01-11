@@ -13,10 +13,19 @@ public sealed class MetadataFetcher(
 	private const int TimeoutSeconds = 45;
 	private const int MaxConcurrentFetches = 50;
 	private const int TcpListenPort = 55555;
+	private const int StatsIntervalSeconds = 10;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
 
 	private readonly HashSet<string> ProcessedHashes = [];
 	private ClientEngine? Engine;
+
+	// Stats counters
+	private long HashesReceived = 0;
+	private long FetchAttempts = 0;
+	private long FetchSuccesses = 0;
+	private long FetchTimeouts = 0;
+	private long FetchErrors = 0;
+	private long ActiveFetches = 0;
 
 	/// <inheritdoc/>
 	protected override async Task ExecuteAsync(CancellationToken CancellationToken)
@@ -35,11 +44,15 @@ public sealed class MetadataFetcher(
 
 		Engine = new ClientEngine(SettingsBuilder.ToSettings());
 		await Engine.StartAllAsync();
+		Logger.LogInformation("MonoTorrent engine started");
 
 		SemaphoreSlim Semaphore = new(MaxConcurrentFetches);
+		Task StatsTask = StatsLoopAsync(CancellationToken);
 
 		await foreach (string HashHex in HashChannelReader.ReadAllAsync(CancellationToken))
 		{
+			Interlocked.Increment(ref HashesReceived);
+
 			if (ProcessedHashes.Contains(HashHex))
 			{
 				continue;
@@ -48,12 +61,33 @@ public sealed class MetadataFetcher(
 			ProcessedHashes.Add(HashHex);
 
 			await Semaphore.WaitAsync(CancellationToken);
+			Interlocked.Increment(ref ActiveFetches);
 			_ = ProcessHashAsync(HashHex, Semaphore, CancellationToken);
+		}
+	}
+
+	private async Task StatsLoopAsync(CancellationToken CancellationToken)
+	{
+		while (!CancellationToken.IsCancellationRequested)
+		{
+			await Task.Delay(TimeSpan.FromSeconds(StatsIntervalSeconds), CancellationToken);
+
+			Logger.LogInformation(
+				"[FETCHER] Received: {Recv} | Attempts: {Attempts} | Success: {Success} | Timeout: {Timeout} | Errors: {Errors} | Active: {Active}",
+				Interlocked.Read(ref HashesReceived),
+				Interlocked.Read(ref FetchAttempts),
+				Interlocked.Read(ref FetchSuccesses),
+				Interlocked.Read(ref FetchTimeouts),
+				Interlocked.Read(ref FetchErrors),
+				Interlocked.Read(ref ActiveFetches));
 		}
 	}
 
 	private async Task ProcessHashAsync(string HashHex, SemaphoreSlim Semaphore, CancellationToken CancellationToken)
 	{
+		Interlocked.Increment(ref FetchAttempts);
+		Logger.LogDebug("[FETCH] Starting: {Hash}", HashHex[..16] + "...");
+
 		try
 		{
 			using IServiceScope Scope = ScopeFactory.CreateScope();
@@ -63,12 +97,14 @@ public sealed class MetadataFetcher(
 			bool Exists = await Db.Torrents.AnyAsync(T => T.InfoHash == HashHex, CancellationToken);
 			if (Exists)
 			{
+				Logger.LogDebug("[SKIP] Already indexed: {Hash}", HashHex[..16] + "...");
 				return;
 			}
 
 			// Parse hex string to InfoHash
 			if (HashHex.Length != 40)
 			{
+				Logger.LogWarning("[INVALID] Bad hash length: {Hash}", HashHex);
 				return;
 			}
 
@@ -80,25 +116,30 @@ public sealed class MetadataFetcher(
 
 			try
 			{
-				TaskCompletionSource<bool> MetadataReceived = new();
-
 				using CancellationTokenSource TimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken);
 				TimeoutCts.CancelAfter(TimeSpan.FromSeconds(TimeoutSeconds));
 
-				// Poll for metadata instead of using event (API changed in v3)
 				await Manager.StartAsync();
+				Logger.LogDebug("[FETCH] Waiting for metadata: {Hash}", HashHex[..16] + "...");
 
 				while (!TimeoutCts.Token.IsCancellationRequested)
 				{
 					if (Manager.HasMetadata)
 					{
 						await SaveToDatabaseAsync(Db, Manager, HashHex, CancellationToken);
-						Logger.LogInformation("[INDEXED] {Name}", Manager.Torrent?.Name ?? HashHex);
-						break;
+						Interlocked.Increment(ref FetchSuccesses);
+						Logger.LogInformation("[INDEXED] {Name} ({Size} bytes)", 
+							Manager.Torrent?.Name ?? HashHex, 
+							Manager.Torrent?.Size ?? 0);
+						return;
 					}
 
 					await Task.Delay(500, TimeoutCts.Token);
 				}
+
+				// Timeout reached
+				Interlocked.Increment(ref FetchTimeouts);
+				Logger.LogDebug("[TIMEOUT] No metadata after {Seconds}s: {Hash}", TimeoutSeconds, HashHex[..16] + "...");
 			}
 			finally
 			{
@@ -112,10 +153,12 @@ public sealed class MetadataFetcher(
 		}
 		catch (Exception Ex)
 		{
-			Logger.LogDebug("Failed to fetch {Hash}: {Message}", HashHex, Ex.Message);
+			Interlocked.Increment(ref FetchErrors);
+			Logger.LogDebug("[ERROR] {Hash}: {Message}", HashHex[..16] + "...", Ex.Message);
 		}
 		finally
 		{
+			Interlocked.Decrement(ref ActiveFetches);
 			Semaphore.Release();
 		}
 	}
