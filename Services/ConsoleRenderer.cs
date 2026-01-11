@@ -76,12 +76,21 @@ public sealed class ConsoleRenderer : BackgroundService
 			
 			// 2. Draw Content
 			Sb.Append(Content);
+
+			// 3. Clear remaining space on line with spaces to erase ghosting
+			// This is CRITICAL: We must pad with spaces up to the border position
+			int VisibleLen = VisibleWidth(Content);
+			int Padding = WindowWidth - 3 - VisibleLen;
+			if (Padding > 0)
+			{
+				Sb.Append(new string(' ', Padding));
+			}
 			
-			// 3. Force cursor to right edge using ANSI absolute positioning
+			// 4. Force cursor to right edge using ANSI absolute positioning
 			// \e[nG moves cursor to column n. We use WindowWidth.
 			Sb.Append($"\e[{WindowWidth}G");
 			
-			// 4. Draw Right Border
+			// 5. Draw Right Border
 			Sb.AppendLine($"{Cyan}║{Reset}");
 		}
 
@@ -114,7 +123,6 @@ public sealed class ConsoleRenderer : BackgroundService
 		// --- Fetcher ---
 		DrawLine($"{Magenta}📥 METADATA FETCHER{Reset}");
 		DrawLine($"   Received: {Yellow}{FetcherReceived,9}{Reset}        │ Active:   {Yellow}{FetcherActive,9}{Reset}");
-		// Check for 0 successes to avoid divide by zero, though SuccessRate handles it above visually
 		DrawLine($"   Success:  {Green}{FetcherSuccesses,9}{Reset}        │ Rate:     {Green}{SuccessRate,8:F1}%{Reset}");
 		DrawLine($"   Timeout:  {Yellow}{FetcherTimeouts,9}{Reset}        │ Errors:   {Red}{FetcherErrors,9}{Reset}");
 		
@@ -128,7 +136,6 @@ public sealed class ConsoleRenderer : BackgroundService
 		{
 			if (i < Recent.Length)
 			{
-				// Truncate carefully taking double-width chars into account
 				string Name = TruncateWithEllipsis(Recent[i], WindowWidth - 8); 
 				DrawLine($"   {Green}✓{Reset} {Name}");
 			}
@@ -182,6 +189,8 @@ public sealed class ConsoleRenderer : BackgroundService
 
 		foreach (char C in Text)
 		{
+			if (C < 32) continue; // Skip control characters
+			
 			int CharWidth = IsDoubleWidth(C) ? 2 : 1;
 			if (CurrentWidth + CharWidth + 3 > MaxWidth) // Leave room for ...
 			{
