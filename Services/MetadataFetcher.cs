@@ -4,15 +4,19 @@ namespace DhtScraper.Services;
 /// <remarks>
 /// Consumes info_hash values from the channel and uses MonoTorrent
 /// to download only the metadata (file names, sizes) from the swarm.
+/// Persists pending hashes for restart recovery.
 /// </remarks>
 public sealed class MetadataFetcher(
 	ChannelReader<string> HashChannelReader,
-	IServiceScopeFactory ScopeFactory) : BackgroundService
+	ChannelWriter<string> HashChannelWriter,
+	IServiceScopeFactory ScopeFactory,
+	IHostApplicationLifetime Lifetime) : BackgroundService
 {
 	private const int TimeoutSeconds = 10;
 	private const int MaxConcurrentFetches = 100;
 	private const int TcpListenPort = 55555;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
+	private static readonly string EngineStatePath = Path.Combine(AppContext.BaseDirectory, "engine_state");
 
 	private readonly HashSet<string> ProcessedHashes = [];
 	private ClientEngine? Engine;
@@ -28,11 +32,38 @@ public sealed class MetadataFetcher(
 				[string.Empty] = new IPEndPoint(IPAddress.Any, TcpListenPort)
 			},
 			// Enable MonoTorrent's DHT so it can find peers for metadata exchange
-			DhtEndPoint = new IPEndPoint(IPAddress.Any, 6882)
+			DhtEndPoint = new IPEndPoint(IPAddress.Any, 6882),
+			// Set cache directory for state persistence
+			CacheDirectory = EngineStatePath
 		};
 
-		Engine = new ClientEngine(SettingsBuilder.ToSettings());
+		EngineSettings Settings = SettingsBuilder.ToSettings();
+
+		// Try to restore engine state if exists (includes DHT routing table)
+		if (Directory.Exists(EngineStatePath))
+		{
+			try
+			{
+				Engine = await ClientEngine.RestoreStateAsync(EngineStatePath);
+			}
+			catch
+			{
+				// Fall back to creating new engine on restore failure
+				Engine = new ClientEngine(Settings);
+			}
+		}
+		else
+		{
+			Engine = new ClientEngine(Settings);
+		}
+
 		await Engine.StartAllAsync();
+
+		// Register shutdown handler to save engine state
+		Lifetime.ApplicationStopping.Register(() => SaveEngineStateOnShutdown());
+
+		// Load initial state from database
+		await LoadInitialStateAsync(CancellationToken);
 
 		SemaphoreSlim Semaphore = new(MaxConcurrentFetches);
 
@@ -47,10 +78,95 @@ public sealed class MetadataFetcher(
 
 			ProcessedHashes.Add(HashHex);
 
+			// Persist hash to pending table before processing
+			await AddToPendingAsync(HashHex, CancellationToken);
+
 			await Semaphore.WaitAsync(CancellationToken);
 			Interlocked.Increment(ref ConsoleRenderer.FetcherActive);
 			_ = ProcessHashAsync(HashHex, Semaphore, CancellationToken);
 		}
+	}
+
+	private async Task LoadInitialStateAsync(CancellationToken CancellationToken)
+	{
+		using IServiceScope Scope = ScopeFactory.CreateScope();
+		TorrentContext Db = Scope.ServiceProvider.GetRequiredService<TorrentContext>();
+
+		// Pre-populate ProcessedHashes from existing torrents
+		List<string> ExistingHashes = await Db.Torrents
+			.AsNoTracking()
+			.Select(T => T.InfoHash)
+			.ToListAsync(CancellationToken);
+
+		foreach (string Hash in ExistingHashes)
+		{
+			ProcessedHashes.Add(Hash);
+		}
+
+		// Re-queue pending hashes from previous run
+		List<string> PendingHashes = await Db.PendingHashes
+			.AsNoTracking()
+			.Select(P => P.InfoHash)
+			.ToListAsync(CancellationToken);
+
+		foreach (string Hash in PendingHashes)
+		{
+			if (!ProcessedHashes.Contains(Hash))
+			{
+				HashChannelWriter.TryWrite(Hash);
+			}
+		}
+	}
+
+	private async Task AddToPendingAsync(string HashHex, CancellationToken CancellationToken)
+	{
+		using IServiceScope Scope = ScopeFactory.CreateScope();
+		TorrentContext Db = Scope.ServiceProvider.GetRequiredService<TorrentContext>();
+
+		bool Exists = await Db.PendingHashes.AnyAsync(P => P.InfoHash == HashHex, CancellationToken);
+		if (!Exists)
+		{
+			Db.PendingHashes.Add(new PendingHash
+			{
+				InfoHash = HashHex,
+				QueuedAtUtc = DateTime.UtcNow
+			});
+			await Db.SaveChangesAsync(CancellationToken);
+		}
+	}
+
+	private async Task RemoveFromPendingAsync(string HashHex, CancellationToken CancellationToken)
+	{
+		using IServiceScope Scope = ScopeFactory.CreateScope();
+		TorrentContext Db = Scope.ServiceProvider.GetRequiredService<TorrentContext>();
+
+		PendingHash? Pending = await Db.PendingHashes.FirstOrDefaultAsync(P => P.InfoHash == HashHex, CancellationToken);
+		if (Pending is not null)
+		{
+			Db.PendingHashes.Remove(Pending);
+			await Db.SaveChangesAsync(CancellationToken);
+		}
+	}
+
+	private void SaveEngineStateOnShutdown()
+	{
+		if (Engine is null)
+		{
+			return;
+		}
+
+		// Fire and forget save on shutdown
+		_ = Task.Run(async () =>
+		{
+			try
+			{
+				await Engine.SaveStateAsync();
+			}
+			catch
+			{
+				// Ignore errors during shutdown
+			}
+		});
 	}
 
 	private async Task ProcessHashAsync(string HashHex, SemaphoreSlim Semaphore, CancellationToken CancellationToken)
@@ -65,11 +181,14 @@ public sealed class MetadataFetcher(
 			bool Exists = await Db.Torrents.AnyAsync(T => T.InfoHash == HashHex, CancellationToken);
 			if (Exists)
 			{
+				// Already in DB, remove from pending
+				await RemoveFromPendingAsync(HashHex, CancellationToken);
 				return;
 			}
 
 			if (HashHex.Length != 40)
 			{
+				await RemoveFromPendingAsync(HashHex, CancellationToken);
 				return;
 			}
 
@@ -96,6 +215,9 @@ public sealed class MetadataFetcher(
 						await SaveToDatabaseAsync(Db, Manager, HashHex, CancellationToken);
 						Interlocked.Increment(ref ConsoleRenderer.FetcherSuccesses);
 
+						// Remove from pending after successful save
+						await RemoveFromPendingAsync(HashHex, CancellationToken);
+
 						// Add to recent list for TUI
 						string Name = Manager.Torrent?.Name ?? HashHex;
 						ConsoleRenderer.RecentIndexed.Enqueue(Name);
@@ -110,6 +232,7 @@ public sealed class MetadataFetcher(
 					if ((DateTime.UtcNow - StartTime).TotalSeconds >= TimeoutSeconds)
 					{
 						Interlocked.Increment(ref ConsoleRenderer.FetcherTimeouts);
+						// Keep in pending for retry on next run
 						return;
 					}
 
@@ -129,6 +252,7 @@ public sealed class MetadataFetcher(
 		catch
 		{
 			Interlocked.Increment(ref ConsoleRenderer.FetcherErrors);
+			// Keep in pending for retry on next run
 		}
 		finally
 		{
@@ -172,3 +296,4 @@ public sealed class MetadataFetcher(
 		await Db.SaveChangesAsync(CancellationToken);
 	}
 }
+

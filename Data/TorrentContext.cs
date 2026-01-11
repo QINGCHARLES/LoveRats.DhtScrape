@@ -4,10 +4,16 @@ namespace DhtScraper.Data;
 public sealed class TorrentContext : DbContext
 {
 	/// <summary>Indexed torrents discovered from DHT network.</summary>
-	public DbSet<TorrentInfo> Torrents { get; set; }
+	public DbSet<TorrentInfo> Torrents { get; set; } = null!;
 
 	/// <summary>Files contained within indexed torrents.</summary>
-	public DbSet<TorrentFile> Files { get; set; }
+	public DbSet<TorrentFile> Files { get; set; } = null!;
+
+	/// <summary>Known DHT nodes for warm-start on restart.</summary>
+	public DbSet<DhtNode> Nodes { get; set; } = null!;
+
+	/// <summary>Pending hashes awaiting metadata fetch.</summary>
+	public DbSet<PendingHash> PendingHashes { get; set; } = null!;
 
 	/// <inheritdoc/>
 	protected override void OnConfiguring(DbContextOptionsBuilder Options)
@@ -21,6 +27,14 @@ public sealed class TorrentContext : DbContext
 	{
 		ModelBuilder.Entity<TorrentInfo>()
 			.HasIndex(T => T.InfoHash)
+			.IsUnique();
+
+		ModelBuilder.Entity<DhtNode>()
+			.HasIndex(N => new { N.IpAddress, N.Port })
+			.IsUnique();
+
+		ModelBuilder.Entity<PendingHash>()
+			.HasIndex(P => P.InfoHash)
 			.IsUnique();
 	}
 }
