@@ -9,13 +9,13 @@ public sealed class DhtCrawler(
 	ChannelWriter<string> HashChannelWriter,
 	ILogger<DhtCrawler> Logger) : BackgroundService
 {
-	private const int ReceiveBufferSizeBytes = 1024 * 1024;
+	private const int ReceiveBufferSizeBytes = 256 * 1024; // Reduced from 1MB
 	private const int StandardDhtPort = 6881;
-	private const int RebootstrapDelayMs = 1000;
-	private const int ThrottleDelayMs = 10;
-	private const int LowQueueThreshold = 100;
-	private const int MaxSeenNodes = 100_000;
+	private const int RebootstrapDelayMs = 5000; // Increased from 1000
+	private const int ThrottleDelayMs = 50; // Increased from 10
+	private const int MaxSeenNodes = 50_000; // Reduced from 100k
 	private const int StatsIntervalSeconds = 10;
+	private const int MaxQueriesPerSecond = 100; // Rate limit
 
 	private static readonly string[] Routers =
 	[
@@ -39,7 +39,8 @@ public sealed class DhtCrawler(
 	/// <inheritdoc/>
 	protected override async Task ExecuteAsync(CancellationToken CancellationToken)
 	{
-		Logger.LogInformation("Starting Recursive DHT Crawler on port {Port}...", StandardDhtPort);
+		Logger.LogInformation("Starting Recursive DHT Crawler on port {Port} (rate limited to {Rate}/sec)...", 
+			StandardDhtPort, MaxQueriesPerSecond);
 
 		UdpSocket.Bind(new IPEndPoint(IPAddress.Any, StandardDhtPort));
 		UdpSocket.ReceiveBufferSize = ReceiveBufferSizeBytes;
@@ -128,19 +129,17 @@ public sealed class DhtCrawler(
 
 	private async Task CrawlLoopAsync(CancellationToken CancellationToken)
 	{
-		Logger.LogInformation("Crawl loop started...");
+		Logger.LogInformation("Crawl loop started (throttled)...");
+
+		// Rate limiter: X queries per second
+		int DelayBetweenQueriesMs = 1000 / MaxQueriesPerSecond;
 
 		while (!CancellationToken.IsCancellationRequested)
 		{
 			if (NodesToVisit.TryDequeue(out IPEndPoint? Endpoint))
 			{
 				await SendFindNodeAsync(Endpoint);
-
-				// Pace ourselves slightly to avoid flooding network card
-				if (NodesToVisit.Count < LowQueueThreshold)
-				{
-					await Task.Delay(ThrottleDelayMs, CancellationToken);
-				}
+				await Task.Delay(DelayBetweenQueriesMs, CancellationToken); // Rate limit
 			}
 			else
 			{

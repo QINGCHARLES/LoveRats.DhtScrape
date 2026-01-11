@@ -10,8 +10,8 @@ public sealed class MetadataFetcher(
 	IServiceScopeFactory ScopeFactory,
 	ILogger<MetadataFetcher> Logger) : BackgroundService
 {
-	private const int TimeoutSeconds = 45;
-	private const int MaxConcurrentFetches = 50;
+	private const int TimeoutSeconds = 30; // Reduced from 45
+	private const int MaxConcurrentFetches = 10; // Reduced from 50
 	private const int TcpListenPort = 55555;
 	private const int StatsIntervalSeconds = 10;
 	private static readonly string MetadataSavePath = Path.Combine(AppContext.BaseDirectory, "Downloads_Metadata");
@@ -30,7 +30,8 @@ public sealed class MetadataFetcher(
 	/// <inheritdoc/>
 	protected override async Task ExecuteAsync(CancellationToken CancellationToken)
 	{
-		Logger.LogInformation("Starting Metadata Fetcher on TCP port {Port}...", TcpListenPort);
+		Logger.LogInformation("Starting Metadata Fetcher on TCP port {Port} (max {Max} concurrent)...", 
+			TcpListenPort, MaxConcurrentFetches);
 
 		EngineSettingsBuilder SettingsBuilder = new()
 		{
@@ -47,7 +48,7 @@ public sealed class MetadataFetcher(
 		Logger.LogInformation("MonoTorrent engine started");
 
 		SemaphoreSlim Semaphore = new(MaxConcurrentFetches);
-		Task StatsTask = StatsLoopAsync(CancellationToken);
+		_ = StatsLoopAsync(CancellationToken);
 
 		await foreach (string HashHex in HashChannelReader.ReadAllAsync(CancellationToken))
 		{
@@ -134,7 +135,7 @@ public sealed class MetadataFetcher(
 						return;
 					}
 
-					await Task.Delay(500, TimeoutCts.Token);
+					await Task.Delay(1000, TimeoutCts.Token); // Increased from 500ms
 				}
 
 				// Timeout reached
